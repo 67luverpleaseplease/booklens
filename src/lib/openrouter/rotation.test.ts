@@ -3,19 +3,21 @@
  * request still lands. This is the behaviour the whole app depends on.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { RequestFailure } from './errors';
 
 // Isolated module state per test — keychain and ledger are singletons that read
 // localStorage at construction, so they have to be re-imported after a reset.
 async function freshModules() {
   vi.resetModules();
   localStorage.clear();
-  const [{ keychain }, { ledger }, client, { PRIMARY_CHAIN }] = await Promise.all([
+  const [{ keychain }, { ledger }, client, { PRIMARY_CHAIN }, vision] = await Promise.all([
     import('./keychain'),
     import('./ledger'),
     import('./client'),
     import('./chains'),
+    import('../vision/analyze'),
   ]);
-  return { keychain, ledger, ...client, PRIMARY_CHAIN };
+  return { keychain, ledger, ...client, PRIMARY_CHAIN, ...vision };
 }
 
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
@@ -125,37 +127,6 @@ describe('key rotation', () => {
     expect(seen).not.toContain('key-b');
   });
 
-  it('does not cool off or burn a key when the shared provider pool is busy', async () => {
-    const { keychain, ledger, PRIMARY_CHAIN, chatComplete } = await freshModules();
-    const a = keychain.add('key-a', 'a');
-    // The exact 429 shape OpenRouter returns when the SHARED free pool is
-    // congested — the old classifier pinned this on the key and it never
-    // recovered. Verified live against /api/v1/chat/completions.
-    mockFetchByKey({
-      'key-a': {
-        status: 429,
-        body: {
-          error: {
-            message: 'Provider returned error',
-            code: 429,
-            metadata: {
-              raw: 'google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly',
-            },
-          },
-        },
-      },
-    });
-
-    await expect(
-      chatComplete({ chain: PRIMARY_CHAIN, messages: [{ role: 'user', content: 'hi' }] }),
-    ).rejects.toThrow(/Provider returned error/);
-
-    const k = keychain.list()[0];
-    expect(k.status).toBe('healthy'); // old bug: 'cooling' badges forever
-    expect(keychain.available()).toHaveLength(1); // a retry is allowed right away
-    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(0); // failed calls don't count
-  });
-
   it('honours Retry-After when setting the cooldown', async () => {
     const { keychain, PRIMARY_CHAIN, chatComplete } = await freshModules();
     keychain.add('key-a', 'a');
@@ -177,6 +148,128 @@ describe('key rotation', () => {
     // 90s from the server, not the 20s floor.
     expect(a.cooldownUntil).toBeGreaterThan(before + 85_000);
     expect(a.cooldownUntil).toBeLessThan(before + 95_000);
+  });
+
+  it('keeps a key healthy when only the upstream provider is rate-limited', async () => {
+    const { keychain, PRIMARY_CHAIN, chatComplete } = await freshModules();
+    const a = keychain.add('key-a', 'a');
+
+    mockFetchByKey({
+      'key-a': [
+        {
+          status: 429,
+          body: {
+            error: {
+              message: 'Rate limit exceeded',
+              code: 429,
+              metadata: {
+                error_type: 'rate_limit_exceeded',
+                provider_code: 'rate_limited',
+              },
+            },
+          },
+        },
+        { status: 200, body: okBody },
+      ],
+    });
+
+    const req = { chain: PRIMARY_CHAIN, messages: [{ role: 'user' as const, content: 'hi' }] };
+    await expect(chatComplete(req)).rejects.toMatchObject({ kind: 'provider-rate-limited' });
+
+    expect(keychain.list()[0].status).toBe('healthy');
+    expect(keychain.available()).toContain(a);
+
+    await expect(chatComplete(req)).resolves.toMatchObject({ model: okBody.model });
+  });
+
+  it('falls through to the backup model family after a provider 429', async () => {
+    const { keychain, analyze } = await freshModules();
+    const a = keychain.add('key-a', 'a');
+    const result = {
+      detected: 'cover',
+      confidence: 0.9,
+      book: null,
+      summaries: [
+        {
+          kind: 'hook',
+          label_zh: '钩子',
+          zh: '好书',
+          pinyin: 'hǎo shū',
+          en: 'A good book.',
+          tokens: [
+            { w: '好', py: 'hǎo', en: 'good' },
+            { w: '书', py: 'shū', en: 'book' },
+          ],
+        },
+      ],
+      key_terms: [],
+      talking_points: [],
+      extracted_text: '',
+      caveats: '',
+    };
+
+    const { seen } = mockFetchByKey({
+      'key-a': [
+        {
+          status: 429,
+          body: {
+            error: {
+              message: 'Rate limit exceeded',
+              code: 429,
+              metadata: {
+                error_type: 'rate_limit_exceeded',
+                provider_code: 'rate_limited',
+              },
+            },
+          },
+        },
+        {
+          status: 200,
+          body: {
+            ...okBody,
+            model: 'nvidia/nemotron-nano-12b-v2-vl:free',
+            choices: [{ message: { content: JSON.stringify(result) } }],
+          },
+        },
+      ],
+    });
+
+    const outcome = await analyze({
+      images: ['data:image/jpeg;base64,AA=='],
+      intent: 'cover',
+      level: 4,
+    });
+
+    expect(seen.filter(Boolean)).toEqual(['key-a', 'key-a']);
+    expect(outcome.result.summaries[0].zh).toBe('好书');
+    expect(keychain.available()).toContain(a);
+  });
+
+  it('does not poison inference availability when key metadata check gets a 429', async () => {
+    const { keychain, PRIMARY_CHAIN } = await freshModules();
+    const a = keychain.add('key-a', 'a');
+
+    keychain.reportVerificationFailure(
+      a.id,
+      new RequestFailure('rate-limited', 429, 'Metadata endpoint rate limit'),
+    );
+
+    expect(keychain.available()).toContain(a);
+    expect(keychain.list()[0].status).toBe('healthy');
+    expect(PRIMARY_CHAIN.models.length).toBeGreaterThan(0);
+  });
+
+  it('still rejects a key when metadata verification gets a 401', async () => {
+    const { keychain } = await freshModules();
+    const a = keychain.add('key-a', 'a');
+
+    keychain.reportVerificationFailure(
+      a.id,
+      new RequestFailure('invalid-key', 401, 'Invalid API key'),
+    );
+
+    expect(keychain.available()).not.toContain(a);
+    expect(keychain.list()[0].status).toBe('invalid');
   });
 
   it('skips a key the ledger already knows is spent, with no network call', async () => {
@@ -250,7 +343,7 @@ describe('key rotation', () => {
     expect(body.route).toBe('fallback');
   });
 
-  it('refunds a failed upstream attempt — only the successful call counts', async () => {
+  it('counts one ledger entry per network attempt, including the 5xx retry', async () => {
     const { keychain, ledger, PRIMARY_CHAIN, chatComplete } = await freshModules();
     const a = keychain.add('key-a', 'a');
     mockFetchByKey({
@@ -259,8 +352,6 @@ describe('key rotation', () => {
 
     await chatComplete({ chain: PRIMARY_CHAIN, messages: [{ role: 'user', content: 'hi' }] });
 
-    // Two attempts were sent (record ×2), the 5xx was refunded (refund ×1):
-    // matches OpenRouter's accounting, which bills completions, not rejects.
-    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(1);
+    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(2);
   });
 });

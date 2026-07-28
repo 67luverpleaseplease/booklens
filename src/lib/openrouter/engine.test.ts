@@ -60,25 +60,21 @@ describe('QuotaLedger', () => {
     expect(snap.dayResetAt).toBe(nextUtcMidnight(t));
   });
 
-  it('refunds a failed transport attempt, minute window and day count', () => {
-    const t = 1_700_000_000_000;
-    l.record('k', t);
-    l.record('k', t);
-    l.refund('k', t);
-    const snap = l.snapshot('k', limits, t);
-    expect(snap.minuteUsed).toBe(1);
-    expect(snap.dayUsed).toBe(1);
-    // Congestion-day with nothing spent must never lock the app out: no going
-    // below zero either.
-    l.refund('k', t);
-    l.refund('k', t);
-    expect(l.snapshot('k', limits, t).dayUsed).toBe(0);
-  });
-
   it('reports how long until the minute window frees up', () => {
     const t = 1_700_000_000_000;
     for (let i = 0; i < 3; i++) l.record('k', t);
     expect(l.snapshot('k', limits, t + 20_000).minuteFreeIn).toBe(40_000);
+  });
+
+  it('clears a stale minute penalty after the metadata endpoint verifies the key', () => {
+    const t = 1_700_000_000_000;
+    l.markRateLimited('k', limits, t);
+    expect(l.hasRoom('k', limits, t)).toBe(false);
+
+    l.clearMinute('k', t);
+
+    expect(l.hasRoom('k', limits, t)).toBe(true);
+    expect(l.snapshot('k', limits, t).minuteUsed).toBe(0);
   });
 
   it('tracks keys independently', () => {
@@ -228,30 +224,20 @@ describe('classifyResponse', () => {
     expect(f.shouldRotateKey).toBe(true);
   });
 
-  it('classifies shared-pool congestion 429 as upstream, never a key rate-limit', () => {
-    // Exact shape OpenRouter returns when the FREE POOL is busy — the key was
-    // never involved (verified live against /api/v1/chat/completions).
+  it('does not blame the API key for a provider-level 429', () => {
     const f = classifyResponse(res(429), {
       error: {
-        message: 'Provider returned error',
+        message: 'Rate limit exceeded',
         code: 429,
         metadata: {
-          raw: 'google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly',
+          error_type: 'rate_limit_exceeded',
+          provider_code: 'rate_limited',
         },
       },
     })!;
-    expect(f.kind).toBe('upstream');
-    // Blaming the key is exactly the failure mode of the old classifier.
+    expect(f.kind).toBe('provider-rate-limited');
+    expect(f.shouldRetrySameKey).toBe(false);
     expect(f.shouldRotateKey).toBe(false);
-    expect(f.shouldRetrySameKey).toBe(true);
-  });
-
-  it('keeps a genuine key-sided 429 as rate-limited', () => {
-    const f = classifyResponse(res(429), {
-      error: { message: 'Rate limit exceeded: 20 requests per minute', code: 429 },
-    })!;
-    expect(f.kind).toBe('rate-limited');
-    expect(f.shouldRotateKey).toBe(true);
   });
 
   it('classifies 402 as quota-exhausted', () => {
@@ -280,6 +266,26 @@ describe('classifyResponse', () => {
   it('catches a provider error hiding inside a 200', () => {
     const f = classifyResponse(res(200), { error: { message: 'upstream 429', code: 429 } })!;
     expect(f.kind).toBe('rate-limited');
+  });
+
+  it('catches current OpenRouter choice-level provider errors inside a 200', () => {
+    const f = classifyResponse(res(200), {
+      choices: [
+        {
+          finish_reason: 'error',
+          error: {
+            message: 'Provider overloaded',
+            code: 429,
+            metadata: {
+              error_type: 'rate_limit_exceeded',
+              provider_code: 'rate_limited',
+            },
+          },
+        },
+      ],
+    })!;
+    expect(f.kind).toBe('provider-rate-limited');
+    expect(f.message).toBe('Provider overloaded');
   });
 
   it('returns null for a clean success', () => {

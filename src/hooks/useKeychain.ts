@@ -47,10 +47,14 @@ export function useKeyTester() {
     setState((s) => ({ ...s, [record.id]: 'testing' }));
     try {
       const info = await fetchKeyInfo(record.key);
-      // Prefer the server's real numbers over our free-tier assumption: a key
-      // that has ever bought credits gets 1000/day, not 50.
-      const rpd = info.isFreeTier ? (info.limit === null ? 50 : 1000) : 1000;
-      const rpm = info.rateLimit?.requests ?? record.limits.rpm;
+      // `rate_limit` is deprecated by OpenRouter and its interval is not
+      // necessarily one minute. Keep our documented RPM; use account tier for
+      // the daily free-model limit.
+      const rpd = info.isFreeTier ? 50 : 1000;
+      const rpm = record.limits.rpm;
+      // Older BookLens versions could poison this minute window when GET /key
+      // itself returned 429. A successful verification clears that stale mark.
+      ledger.clearMinute(record.id);
       keychain.update(record.id, {
         status: 'healthy',
         cooldownUntil: 0,
@@ -67,7 +71,7 @@ export function useKeyTester() {
       }));
     } catch (err) {
       const failure = classifyThrown(err);
-      keychain.reportFailure(record.id, failure);
+      keychain.reportVerificationFailure(record.id, failure);
       setState((s) => ({ ...s, [record.id]: 'failed' }));
       setMessages((m) => ({ ...m, [record.id]: humanize(failure) }));
     }

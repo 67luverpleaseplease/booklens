@@ -187,6 +187,22 @@ export class Keychain {
     this.emit();
   }
 
+  /**
+   * GET /key has its own throttling. Only an auth rejection proves inference
+   * cannot use this key; temporary metadata errors must not poison scan quota.
+   */
+  reportVerificationFailure(id: string, failure: RequestFailure): void {
+    if (failure.kind === 'invalid-key') {
+      this.reportFailure(id, failure);
+      return;
+    }
+    const k = this.keys.find((x) => x.id === id);
+    if (!k) return;
+    k.failCount += 1;
+    k.lastError = failure.message;
+    this.emit();
+  }
+
   reportSuccess(id: string): void {
     const k = this.keys.find((x) => x.id === id);
     if (!k) return;
