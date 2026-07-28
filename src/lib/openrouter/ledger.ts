@@ -7,7 +7,10 @@
  * when our estimate drifts.
  */
 
-const STORAGE_KEY = 'booklens.ledger.v1';
+// v1→v2: older builds wrongly burned dayCount on provider-side congestion and
+// /key throttling, leaving devices permanently "out of requests" until UTC
+// midnight. Deliberately start a clean ledger so every install self-heals.
+const STORAGE_KEY = 'booklens.ledger.v2';
 const MINUTE_MS = 60_000;
 
 export type KeyLimits = { rpm: number; rpd: number };
