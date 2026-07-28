@@ -13,6 +13,7 @@ export type FailureKind =
   | 'bad-request' // 400 / 422 — our fault, retrying won't help
   | 'upstream' // 5xx / 502-from-provider — retry same key once
   | 'network' // fetch threw — retry same key once
+  | 'timeout' // attempt exceeded its cap — rotate, don't wait it out
   | 'no-content'; // 200 but nothing usable in the body
 
 export class RequestFailure extends Error {
@@ -157,6 +158,9 @@ function classifyStatus(
 export function classifyThrown(err: unknown): RequestFailure {
   if (err instanceof RequestFailure) return err;
   const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof DOMException && err.name === 'TimeoutError') {
+    return new RequestFailure('timeout', 0, message || 'The model took too long to answer.');
+  }
   if (err instanceof DOMException && err.name === 'AbortError') {
     return new RequestFailure('network', 0, 'Request was cancelled.');
   }
@@ -180,6 +184,8 @@ export function humanize(f: RequestFailure): string {
       return 'The model provider had a problem.';
     case 'network':
       return 'No connection.';
+    case 'timeout':
+      return 'The model took too long to answer. Try again.';
     case 'no-content':
       return 'The model returned an empty response.';
   }

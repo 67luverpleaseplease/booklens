@@ -7,6 +7,11 @@ import { VitePWA } from 'vite-plugin-pwa';
 // base: './' so the same build runs from GitHub Pages, Cloudflare, or file://
 export default defineConfig({
   base: './',
+  define: {
+    // Stamped by deploy.yml with the commit SHA, so we can tell which build a
+    // user's phone is actually running (PWA caches are sticky).
+    __BOOKLENS_BUILD__: JSON.stringify(process.env.BOOKLENS_BUILD ?? 'dev'),
+  },
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },

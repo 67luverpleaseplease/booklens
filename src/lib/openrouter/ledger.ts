@@ -114,6 +114,20 @@ export class QuotaLedger {
     this.save();
   }
 
+  /**
+   * Undo the last record(): OpenRouter only counts completions it actually
+   * served, so a failure that never produced one (provider congestion, a
+   * dropped connection, a 5xx, an empty reply) must not consume daily quota.
+   * Without this, a bad evening of upstream 429s locally bricks a key whose
+   * server-side usage is still zero.
+   */
+  refund(keyId: string, now = Date.now()): void {
+    const s = this.stateFor(keyId, now);
+    if (s.minuteWindow.length) s.minuteWindow.pop();
+    s.dayCount = Math.max(0, s.dayCount - 1);
+    this.save();
+  }
+
   /** A real 402 / daily-cap error means the day is done regardless of our count. */
   markDayExhausted(keyId: string, limits: KeyLimits, now = Date.now()): void {
     const s = this.stateFor(keyId, now);

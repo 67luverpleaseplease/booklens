@@ -28,6 +28,8 @@ export type ChatRequest = {
   /** Extra body fields — `response_format`, `tools`, `tool_choice`. */
   extra?: Record<string, unknown>;
   signal?: AbortSignal;
+  /** Per-attempt timeout; defaults to ATTEMPT_TIMEOUT_MS. Tests shrink it. */
+  timeoutMs?: number;
   /** Fires whenever the transport moves to a different key. */
   onKeyChange?: (key: KeyRecord, attempt: number) => void;
 };
@@ -73,6 +75,59 @@ function headersFor(key: string): HeadersInit {
   };
 }
 
+/**
+ * Failure kinds that never produced a completion, so OpenRouter never counted
+ * them against the account. The local ledger mirrors the server: refund these.
+ * (quota-exhausted and invalid-key are excluded deliberately — the verdict
+ * itself is the information we want to keep.)
+ */
+const NON_BILLABLE: ReadonlySet<RequestFailure['kind']> = new Set([
+  'network',
+  'upstream',
+  'provider-rate-limited',
+  'rate-limited',
+  'timeout',
+  'no-content',
+  'bad-request',
+]);
+
+/**
+ * Free providers hang far more often than they fail fast, and a stalled
+ * connection used to pin a scan on a spinner for minutes. Cap each attempt;
+ * the normal retry/rotation machinery then takes over. 130s on purpose: the
+ * reasoning-class backups legitimately think for ~100-120s before answering,
+ * and cutting them earlier converts the only working fallback into a failure.
+ */
+export const ATTEMPT_TIMEOUT_MS = 130_000;
+
+/**
+ * AbortSignal.any without the iOS 17.2 requirement: one controller driven by
+ * both the caller's signal and a timeout. The timeout aborts with a
+ * TimeoutError so it reads as a stall, not as a user cancel.
+ */
+function combinedSignal(
+  user: AbortSignal | undefined,
+  ms: number,
+): { signal: AbortSignal; cancel: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    try {
+      controller.abort(new DOMException('The model took too long to answer.', 'TimeoutError'));
+    } catch {
+      controller.abort();
+    }
+  }, ms);
+  if (user) {
+    if (user.aborted) {
+      clearTimeout(timer);
+      controller.abort();
+    } else {
+      user.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+  }
+  return { signal: controller.signal, cancel: () => clearTimeout(timer) };
+}
+
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     const t = setTimeout(resolve, ms);
@@ -114,19 +169,26 @@ async function attempt(
     ...(req.extra ?? {}),
   };
 
+  // The timeout covers the BODY too, not just the connection: providers send
+  // headers early and then stream for minutes, and a stalled stream must not
+  // pin the scan either.
   let res: Response;
+  let parsed: unknown;
+  const timeout = combinedSignal(req.signal, req.timeoutMs ?? ATTEMPT_TIMEOUT_MS);
   try {
     res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: 'POST',
       headers: headersFor(key.key),
       body: JSON.stringify(body),
-      signal: req.signal,
+      signal: timeout.signal,
     });
+    parsed = await readBody(res);
   } catch (err) {
     throw classifyThrown(err);
+  } finally {
+    timeout.cancel();
   }
 
-  const parsed = await readBody(res);
   const failure = classifyResponse(res, parsed);
   if (failure) throw failure;
 
@@ -193,6 +255,9 @@ export async function chatComplete(req: ChatRequest): Promise<ChatResponse> {
 
       // ④ A 5xx or a dropped connection says nothing about the key — one retry.
       if (failure.shouldRetrySameKey) {
+        // The failed attempt never produced a completion — hand its slot back
+        // before the retry takes its own.
+        if (NON_BILLABLE.has(failure.kind)) ledger.refund(key.id);
         try {
           await sleep(400 + Math.random() * 300, req.signal);
           ledger.record(key.id);
@@ -205,12 +270,14 @@ export async function chatComplete(req: ChatRequest): Promise<ChatResponse> {
           if (retryFailure.kind === 'network' && req.signal?.aborted) throw retryFailure;
           lastFailure = retryFailure;
           keychain.reportFailure(key.id, retryFailure);
+          if (NON_BILLABLE.has(retryFailure.kind)) ledger.refund(key.id);
           if (!retryFailure.shouldRotateKey && retryFailure.kind === 'bad-request') throw retryFailure;
           continue;
         }
       }
 
       keychain.reportFailure(key.id, failure);
+      if (NON_BILLABLE.has(failure.kind)) ledger.refund(key.id);
 
       // A malformed request will fail identically on every key — stop early.
       if (failure.kind === 'bad-request') throw failure;

@@ -343,7 +343,7 @@ describe('key rotation', () => {
     expect(body.route).toBe('fallback');
   });
 
-  it('counts one ledger entry per network attempt, including the 5xx retry', async () => {
+  it('counts one ledger entry per served request — failed attempts are refunded', async () => {
     const { keychain, ledger, PRIMARY_CHAIN, chatComplete } = await freshModules();
     const a = keychain.add('key-a', 'a');
     mockFetchByKey({
@@ -352,6 +352,66 @@ describe('key rotation', () => {
 
     await chatComplete({ chain: PRIMARY_CHAIN, messages: [{ role: 'user', content: 'hi' }] });
 
-    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(2);
+    // The 503 never produced a completion (OpenRouter never counted it either),
+    // so only the 200 counts against the daily budget.
+    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(1);
+  });
+
+  it('a provider 429 costs nothing against the daily budget', async () => {
+    const { keychain, ledger, PRIMARY_CHAIN, chatComplete } = await freshModules();
+    const a = keychain.add('key-a', 'a');
+    mockFetchByKey({
+      'key-a': [
+        {
+          status: 429,
+          body: {
+            error: {
+              message: 'Rate limit exceeded',
+              code: 429,
+              metadata: { error_type: 'rate_limit_exceeded', provider_code: 'rate_limited' },
+            },
+          },
+        },
+      ],
+    });
+
+    await expect(
+      chatComplete({ chain: PRIMARY_CHAIN, messages: [{ role: 'user', content: 'hi' }] }),
+    ).rejects.toMatchObject({ kind: 'provider-rate-limited' });
+
+    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(0);
+    expect(keychain.available()).toContain(a);
+  });
+
+  it('abandons a stalled request instead of hanging on a spinner forever', async () => {
+    const { keychain, ledger, PRIMARY_CHAIN, chatComplete } = await freshModules();
+    const a = keychain.add('key-a', 'a');
+
+    // A provider that accepts the connection and never answers.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: { signal?: AbortSignal }) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The model took too long to answer.', 'TimeoutError')),
+          );
+        });
+      }),
+    );
+
+    const t0 = Date.now();
+    await expect(
+      chatComplete({
+        chain: PRIMARY_CHAIN,
+        messages: [{ role: 'user', content: 'hi' }],
+        timeoutMs: 40,
+      }),
+    ).rejects.toMatchObject({ kind: 'timeout' });
+
+    // The stall cost well under a second of wall-clock time, not hours…
+    expect(Date.now() - t0).toBeLessThan(5000);
+    // …and despite one retry, no daily quota was burned on a dead connection.
+    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(0);
+    expect(keychain.list()[0].status).toBe('healthy');
   });
 });

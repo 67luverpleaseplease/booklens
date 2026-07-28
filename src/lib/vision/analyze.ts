@@ -109,49 +109,139 @@ async function runChain(
 
   opts.onProgress?.({ phase: 'writing', via: displayModel(response.model) });
 
-  const raw = extractPayload(response.choice);
+  // A reply can fail two ways: the JSON doesn't parse, or it parses but isn't
+  // the shape we asked for (small free models love returning summaries as bare
+  // strings). Both deserve the same single correction round-trip — worth a
+  // request when the alternative is showing the user nothing, but never more
+  // than one: free-tier budget is finite.
+  let raw = extractPayload(response.choice);
   let parsedJson = repairJson(raw);
+  let data: ScanResult | null = null;
+  let problem: string | null = null;
+  let coerced = false;
+  let repaired = false;
 
-  // One correction round-trip. Worth a request when the alternative is showing
-  // the user nothing, but never more than one — free-tier budget is finite.
   if (!parsedJson.ok) {
+    problem = parsedJson.error;
+  } else {
+    repaired = parsedJson.repaired;
+    const c = coerceScanShape(parsedJson.value);
+    const v = ScanResultSchema.safeParse(c.value);
+    if (v.success) {
+      data = v.data;
+      coerced = c.changed;
+    } else {
+      problem = formatIssues(v.error.issues);
+    }
+  }
+
+  if (problem !== null) {
     const retry = await chatComplete({
       chain,
       messages: [
         ...messages,
         { role: 'assistant', content: raw.slice(0, 4000) },
-        { role: 'user', content: buildRepairMessage(parsedJson.error) },
+        { role: 'user', content: buildRepairMessage(problem) },
       ],
       temperature: 0,
       maxTokens: 4096,
       extra: jsonParts as Record<string, unknown>,
       signal: opts.signal,
     });
-    parsedJson = repairJson(extractPayload(retry.choice));
+    raw = extractPayload(retry.choice);
+    parsedJson = repairJson(raw);
     if (!parsedJson.ok) {
       throw new RequestFailure('no-content', 200, 'The model never returned valid JSON.');
     }
-  }
-
-  const validated = ScanResultSchema.safeParse(parsedJson.value);
-  if (!validated.success) {
-    throw new RequestFailure(
-      'no-content',
-      200,
-      `The response did not match the expected shape: ${validated.error.issues[0]?.message ?? 'unknown'}`,
-    );
+    repaired = parsedJson.repaired;
+    const c2 = coerceScanShape(parsedJson.value);
+    const v2 = ScanResultSchema.safeParse(c2.value);
+    if (!v2.success) {
+      throw new RequestFailure(
+        'no-content',
+        200,
+        `The response did not match the expected shape: ${formatIssues(v2.error.issues)}`,
+      );
+    }
+    data = v2.data;
+    coerced = c2.changed;
   }
 
   return {
     outcome: {
-      result: await normalize(validated.data),
+      result: await normalize(data!),
       model: response.model,
       modelLabel: displayModel(response.model),
-      repaired: parsedJson.repaired,
+      repaired: repaired || coerced,
       chain: chain.id,
     },
     response,
   };
+}
+
+/** Field names small models invent instead of `zh`. */
+const ZH_ALIASES = ['text', 'sentence', 'summary', 'content', 'chinese', 'zh_text'];
+
+function coerceCard(item: unknown): unknown {
+  if (typeof item === 'string') return { zh: item };
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+  const o = item as Record<string, unknown>;
+  if (typeof o.zh === 'string' && o.zh.trim()) return o;
+  for (const key of ZH_ALIASES) {
+    const v = o[key];
+    if (typeof v === 'string' && v.trim()) return { ...o, zh: v };
+  }
+  return o;
+}
+
+/**
+ * Bend the common small-model shortcuts into our contract before zod sees the
+ * value: summaries as bare strings, key_terms as strings, book as a bare
+ * title, card text under an alias. normalize() then fills pinyin and tokens
+ * like it does for any card. Anything we can't bend still fails validation
+ * and earns the correction round-trip.
+ */
+export function coerceScanShape(value: unknown): { value: unknown; changed: boolean } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { value, changed: false };
+  const o = { ...(value as Record<string, unknown>) };
+  let changed = false;
+
+  const s = o.summaries;
+  if (typeof s === 'string' && s.trim()) {
+    o.summaries = [{ zh: s }];
+    changed = true;
+  } else if (Array.isArray(s)) {
+    const mapped = s.map(coerceCard);
+    if (mapped.some((m, i) => m !== s[i])) {
+      o.summaries = mapped;
+      changed = true;
+    }
+  }
+
+  const kt = o.key_terms;
+  if (Array.isArray(kt)) {
+    const mapped = kt.map((t) => (typeof t === 'string' ? { zh: t } : t));
+    if (mapped.some((m, i) => m !== kt[i])) {
+      o.key_terms = mapped;
+      changed = true;
+    }
+  }
+
+  if (typeof o.book === 'string') {
+    o.book = { title_zh: o.book };
+    changed = true;
+  }
+
+  return { value: changed ? o : value, changed };
+}
+
+/** Compact zod issues for the repair prompt — just enough to steer the model. */
+function formatIssues(issues: ReadonlyArray<{ path: PropertyKey[]; message: string }>): string {
+  const first = issues
+    .slice(0, 3)
+    .map((i) => `${i.path.map(String).join('.') || 'root'}: ${i.message}`)
+    .join('; ');
+  return first || 'unknown shape problem';
 }
 
 export async function analyze(opts: AnalyzeOptions): Promise<AnalyzeOutcome> {

@@ -231,7 +231,12 @@ export class Keychain {
           ...k,
           key: deobfuscate(k.key),
           limits: k.limits ?? { ...DEFAULT_LIMITS },
-          // A cooldown that outlived the session has already expired.
+          // Cooldowns and quota verdicts are session-scoped — most were stamped
+          // during one bad evening of provider congestion, and persisting them
+          // only makes a healthy key look dead on the dashboard. The ledger is
+          // the real gate for quota; 'invalid' (a genuine 401) is the only
+          // verdict worth carrying across sessions.
+          status: k.status === 'invalid' ? ('invalid' as const) : ('healthy' as const),
           cooldownUntil: k.status === 'invalid' ? Number.MAX_SAFE_INTEGER : Math.min(k.cooldownUntil ?? 0, now),
         }))
         .filter((k) => k.key);

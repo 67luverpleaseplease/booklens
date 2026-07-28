@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { QuotaLedger, nextUtcMidnight, DEFAULT_LIMITS } from './ledger';
 import { modeForChain, modeForModel, buildJsonRequestParts } from './jsonMode';
 import { repairJson, extractPayload } from './repair';
-import { classifyResponse, RequestFailure } from './errors';
+import { classifyResponse, classifyThrown, RequestFailure } from './errors';
 import { PRIMARY_CHAIN, SECONDARY_CHAIN, capsFor } from './chains';
+import { coerceScanShape } from '../vision/analyze';
+import { ScanResultSchema } from '../vision/schema';
 
 // --- ledger --------------------------------------------------------------
 
@@ -77,6 +79,25 @@ describe('QuotaLedger', () => {
     expect(l.snapshot('k', limits, t).minuteUsed).toBe(0);
   });
 
+  it('refunds a failed attempt — daily quota only counts served completions', () => {
+    const t = 1_700_000_000_000;
+    l.record('k', t);
+    l.refund('k', t);
+    const snap = l.snapshot('k', limits, t);
+    expect(snap.dayUsed).toBe(0);
+    expect(snap.minuteUsed).toBe(0);
+    expect(l.hasRoom('k', limits, t)).toBe(true);
+  });
+
+  it('refund never drags the counters below zero', () => {
+    const t = 1_700_000_000_000;
+    l.refund('k', t);
+    expect(l.snapshot('k', limits, t).dayUsed).toBe(0);
+    l.markRateLimited('k', limits, t);
+    l.refund('k', t);
+    expect(l.snapshot('k', limits, t).dayUsed).toBe(0);
+  });
+
   it('tracks keys independently', () => {
     const t = 1_700_000_000_000;
     for (let i = 0; i < 3; i++) l.record('a', t);
@@ -86,6 +107,44 @@ describe('QuotaLedger', () => {
 
   it('defaults to the documented OpenRouter free-tier limits', () => {
     expect(DEFAULT_LIMITS).toEqual({ rpm: 20, rpd: 50 });
+  });
+});
+
+// --- shape coercion -------------------------------------------------------
+
+describe('shape coercion', () => {
+  it('rescues summaries returned as bare strings — a live gemma failure mode', () => {
+    const { value, changed } = coerceScanShape({
+      detected: 'cover',
+      confidence: 0.8,
+      summaries: ['一本关于苦难与活着的书。', '富贵与老牛相依为命。'],
+    });
+    expect(changed).toBe(true);
+    const v = ScanResultSchema.safeParse(value);
+    expect(v.success).toBe(true);
+    if (v.success) expect(v.data.summaries).toHaveLength(2);
+  });
+
+  it('wraps a whole-string summaries field into one card', () => {
+    const { value, changed } = coerceScanShape({ summaries: '人是为活着本身而活着的。' });
+    expect(changed).toBe(true);
+    expect(ScanResultSchema.safeParse(value).success).toBe(true);
+  });
+
+  it('maps alias field names onto zh', () => {
+    const { value, changed } = coerceScanShape({
+      summaries: [{ kind: 'hook', sentence: '好书。', en: 'A good book.' }],
+    });
+    expect(changed).toBe(true);
+    const v = ScanResultSchema.safeParse(value);
+    expect(v.success).toBe(true);
+    if (v.success) expect(v.data.summaries[0]?.zh).toBe('好书。');
+  });
+
+  it('leaves un-bendable values untouched so the correction round-trip still happens', () => {
+    const { value, changed } = coerceScanShape({ summaries: 42 });
+    expect(changed).toBe(false);
+    expect(ScanResultSchema.safeParse(value).success).toBe(false);
   });
 });
 
@@ -266,6 +325,13 @@ describe('classifyResponse', () => {
   it('catches a provider error hiding inside a 200', () => {
     const f = classifyResponse(res(200), { error: { message: 'upstream 429', code: 429 } })!;
     expect(f.kind).toBe('rate-limited');
+  });
+
+  it('maps our attempt timeout to the timeout kind, which rotates instead of waiting', () => {
+    const f = classifyThrown(new DOMException('The model took too long to answer.', 'TimeoutError'));
+    expect(f.kind).toBe('timeout');
+    expect(f.shouldRetrySameKey).toBe(false);
+    expect(f.shouldRotateKey).toBe(false);
   });
 
   it('catches current OpenRouter choice-level provider errors inside a 200', () => {

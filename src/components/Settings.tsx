@@ -10,6 +10,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
   const s = useSettings();
   const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmRepair, setConfirmRepair] = useState(false);
 
   useEffect(() => {
     if (open) void estimateStorage().then(setStorage);
@@ -177,11 +178,49 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
                 >
                   {confirmClear ? 'tap again to erase everything' : 'clear shelf & words'}
                 </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!confirmRepair) {
+                      setConfirmRepair(true);
+                      setTimeout(() => setConfirmRepair(false), 4000);
+                      return;
+                    }
+                    // Fresh-start for a stuck install: drop the service worker
+                    // and every cache so the next load is guaranteed to be the
+                    // newest build, and wipe stale quota/capability snapshots.
+                    // Keys and the shelf are kept.
+                    try {
+                      const regs = (await navigator.serviceWorker?.getRegistrations?.()) ?? [];
+                      await Promise.all(regs.map((r) => r.unregister()));
+                      for (const name of await caches.keys()) await caches.delete(name);
+                      for (const k of Object.keys(localStorage)) {
+                        if (k.startsWith('booklens.ledger.') || k.startsWith('booklens.caps.')) {
+                          localStorage.removeItem(k);
+                        }
+                      }
+                    } catch {
+                      /* best effort — the reload is the important part */
+                    }
+                    location.reload();
+                  }}
+                  className={[
+                    'rounded-xl px-3 py-2 font-mono text-[11px] transition-colors',
+                    confirmRepair ? 'bg-seal text-paper' : 'text-seal hover:bg-seal/10',
+                  ].join(' ')}
+                >
+                  {confirmRepair ? 'tap again to repair & reload' : 'repair app'}
+                </button>
               </div>
+              <p className="mt-1 text-[11.5px] leading-relaxed text-graphite">
+                If scans ever feel stuck, repair clears the app's cached copy and reloads the latest
+                version. Your keys and shelf stay put.
+              </p>
             </Section>
 
             <p className="mt-6 font-mono text-[10px] leading-relaxed text-graphite/60">
-              书镜 BookLens · everything runs in this browser · no server, no account
+              书镜 BookLens · build {__BOOKLENS_BUILD__.slice(0, 7)} · everything runs in this
+              browser · no server, no account
             </p>
           </div>
         </motion.div>
