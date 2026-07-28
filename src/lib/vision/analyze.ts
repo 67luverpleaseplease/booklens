@@ -61,6 +61,8 @@ export type AnalyzeOptions = {
    * "try a different model" when the first answer was thin or wrong.
    */
   preferChain?: ModelChain;
+  /** Live payload text as it streams in — drives the "watch it read" overlay. */
+  onStream?: (text: string) => void;
 };
 
 export type AnalyzeOutcome = {
@@ -91,6 +93,8 @@ async function runChain(
   });
 
   opts.onProgress?.({ phase: 'understanding', via: displayModel(chain.models[0]) });
+  // A new attempt means new stream text — the overlay mirrors one attempt.
+  opts.onStream?.('');
 
   const response = await chatComplete({
     chain,
@@ -99,6 +103,7 @@ async function runChain(
     maxTokens: 4096,
     extra: jsonParts as Record<string, unknown>,
     signal: opts.signal,
+    onStream: opts.onStream,
     onKeyChange: (_key, attempt) =>
       opts.onProgress?.({
         phase: 'understanding',
@@ -136,6 +141,7 @@ async function runChain(
   }
 
   if (problem !== null) {
+    opts.onStream?.('');
     const retry = await chatComplete({
       chain,
       messages: [
@@ -147,6 +153,7 @@ async function runChain(
       maxTokens: 4096,
       extra: jsonParts as Record<string, unknown>,
       signal: opts.signal,
+      onStream: opts.onStream,
     });
     raw = extractPayload(retry.choice);
     parsedJson = repairJson(raw);

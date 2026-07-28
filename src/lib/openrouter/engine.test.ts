@@ -4,8 +4,10 @@ import { modeForChain, modeForModel, buildJsonRequestParts } from './jsonMode';
 import { repairJson, extractPayload } from './repair';
 import { classifyResponse, classifyThrown, RequestFailure } from './errors';
 import { PRIMARY_CHAIN, SECONDARY_CHAIN, capsFor } from './chains';
+import { parseStreamChunk } from './client';
 import { coerceScanShape } from '../vision/analyze';
 import { ScanResultSchema } from '../vision/schema';
+import { liveDigest } from '../vision/liveText';
 
 // --- ledger --------------------------------------------------------------
 
@@ -107,6 +109,54 @@ describe('QuotaLedger', () => {
 
   it('defaults to the documented OpenRouter free-tier limits', () => {
     expect(DEFAULT_LIMITS).toEqual({ rpm: 20, rpd: 50 });
+  });
+});
+
+// --- streaming ------------------------------------------------------------
+
+describe('SSE stream parsing', () => {
+  it('extracts content deltas (json_object dialect)', () => {
+    const c = parseStreamChunk(
+      '{"id":"g1","model":"m/free","choices":[{"delta":{"content":"活","role":"assistant"},"finish_reason":null}]}',
+    );
+    expect(c).toEqual({ kind: 'content', text: '活', model: 'm/free' });
+  });
+
+  it('extracts tool-call argument fragments (tool dialect, null content)', () => {
+    const c = parseStreamChunk(
+      '{"model":"nv/x","choices":[{"delta":{"content":null,"tool_calls":[{"index":0,"function":{"arguments":"{\\"zh\\""}}]}}]}',
+    );
+    expect(c).toEqual({ kind: 'tool-args', text: '{"zh"', model: 'nv/x' });
+  });
+
+  it('recognises [DONE], error frames, and skips role/empty frames', () => {
+    expect(parseStreamChunk('[DONE]')).toEqual({ kind: 'done' });
+    expect(parseStreamChunk('{"error":{"message":"boom","code":429}}')?.kind).toBe('error');
+    expect(parseStreamChunk('{"choices":[{"delta":{"role":"assistant"}}]}')).toBeNull();
+    expect(parseStreamChunk('{"choices":[{"delta":{}}]}')).toBeNull();
+    expect(parseStreamChunk('not json')).toBeNull();
+    expect(parseStreamChunk('')).toBeNull();
+  });
+});
+
+describe('liveDigest', () => {
+  it('strips field names and structural punctuation into flowing text', () => {
+    const raw = '{"detected":"cover","summaries":[{"kind":"hook","zh":"富贵的一生。","en":"A life."}]}';
+    const digest = liveDigest(raw);
+    expect(digest).not.toMatch(/[{"\[\]}]/);
+    expect(digest).toContain('cover');
+    expect(digest).toContain('富贵的一生。');
+    expect(digest).toContain('A life.');
+    expect(digest).not.toContain('kind');
+    expect(digest).not.toContain('label_zh');
+  });
+
+  it('keeps unknown quoted text (it may be content) and handles empty input', () => {
+    expect(liveDigest('')).toBe('');
+  });
+
+  it('decodes \\uXXXX escapes — nemotron streams Chinese escaped', () => {
+    expect(liveDigest('{"zh":"\\u6d3b\\u7740"}')).toContain('活着');
   });
 });
 

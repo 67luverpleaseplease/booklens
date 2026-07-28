@@ -414,4 +414,69 @@ describe('key rotation', () => {
     expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(0);
     expect(keychain.list()[0].status).toBe('healthy');
   });
+
+  it('streams a completion live and assembles it back into a normal response', async () => {
+    const { keychain, PRIMARY_CHAIN, chatComplete } = await freshModules();
+    keychain.add('key-a', 'a');
+    const frames = [
+      ': OPENROUTER PROCESSING\n\n',
+      'data: {"model":"m/free","choices":[{"delta":{"content":"{\\"zh\\":"}}]}\n\n',
+      'data: {"model":"m/free","choices":[{"delta":{"content":"\\"活\\"}"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse(frames)));
+
+    const seen: string[] = [];
+    const out = await chatComplete({
+      chain: PRIMARY_CHAIN,
+      messages: [{ role: 'user', content: 'hi' }],
+      onStream: (t) => seen.push(t),
+    });
+
+    // The streamed bytes reassemble into exactly the buffered response shape.
+    expect((out.choice as { message: { content: string } }).message.content).toBe('{"zh":"活"}');
+    expect(out.model).toBe('m/free');
+    // …and the UI watched it grow, ending at the full payload.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[seen.length - 1]).toBe('{"zh":"活"}');
+  });
+
+  it('reassembles streamed tool-call arguments and marks the request as streaming', async () => {
+    const { keychain, PRIMARY_CHAIN, chatComplete } = await freshModules();
+    keychain.add('key-a', 'a');
+    const frames = [
+      'data: {"choices":[{"delta":{"content":null,"tool_calls":[{"function":{"arguments":"{\\"a\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":null,"tool_calls":[{"function":{"arguments":"1}"}}]}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const fn = vi.fn(async (_url: string, _init?: RequestInit) => sseResponse(frames));
+    vi.stubGlobal('fetch', fn);
+
+    const out = await chatComplete({
+      chain: PRIMARY_CHAIN,
+      messages: [{ role: 'user', content: 'hi' }],
+      onStream: () => {},
+    });
+
+    const msg = (out.choice as { message: { tool_calls: Array<{ function: { arguments: string } }> } })
+      .message;
+    expect(msg.tool_calls[0]?.function.arguments).toBe('{"a":1}');
+    const body = JSON.parse(String((fn.mock.calls[0]?.[1] as RequestInit).body));
+    expect(body.stream).toBe(true);
+  });
 });
+
+/** An SSE response from raw frames — mirrors how OpenRouter streams. */
+function sseResponse(frames: string[]): Response {
+  const enc = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      for (const f of frames) c.enqueue(enc.encode(f));
+      c.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}

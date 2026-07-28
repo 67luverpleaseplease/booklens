@@ -11,7 +11,7 @@
  */
 
 import { OPENROUTER_BASE, type ModelChain } from './chains';
-import { classifyResponse, classifyThrown, RequestFailure } from './errors';
+import { classifyResponse, classifyThrown, extractMessage, RequestFailure } from './errors';
 import { keychain, type KeyRecord } from './keychain';
 import { ledger } from './ledger';
 
@@ -30,6 +30,12 @@ export type ChatRequest = {
   signal?: AbortSignal;
   /** Per-attempt timeout; defaults to ATTEMPT_TIMEOUT_MS. Tests shrink it. */
   timeoutMs?: number;
+  /**
+   * When set, the request streams and each call carries the payload
+   * accumulated so far — content or tool-call arguments, whichever the model
+   * is emitting. Omit it for a plain buffered response.
+   */
+  onStream?: (text: string) => void;
   /** Fires whenever the transport moves to a different key. */
   onKeyChange?: (key: KeyRecord, attempt: number) => void;
 };
@@ -101,31 +107,188 @@ const NON_BILLABLE: ReadonlySet<RequestFailure['kind']> = new Set([
 export const ATTEMPT_TIMEOUT_MS = 130_000;
 
 /**
- * AbortSignal.any without the iOS 17.2 requirement: one controller driven by
- * both the caller's signal and a timeout. The timeout aborts with a
- * TimeoutError so it reads as a stall, not as a user cancel.
+ * While a response streams, lines arrive constantly (OpenRouter emits
+ * `: OPENROUTER PROCESSING` keep-alives every second or two), so 30s of
+ * silence means the stream is dead, not thinking. The hard cap covers the
+ * whole stream regardless of how chatty it is.
  */
-function combinedSignal(
-  user: AbortSignal | undefined,
-  ms: number,
-): { signal: AbortSignal; cancel: () => void } {
+export const STREAM_STALL_MS = 30_000;
+export const STREAM_CAP_MS = 240_000;
+
+/**
+ * One abortable clock for the whole attempt: armed before the fetch, re-armed
+ * as activity proves the connection is alive, cancelled when the attempt ends.
+ * Times out with a TimeoutError so a stall reads as a stall, not a user cancel.
+ */
+function ioSignal(user: AbortSignal | undefined): {
+  signal: AbortSignal;
+  arm: (ms: number) => void;
+  cancel: () => void;
+} {
   const controller = new AbortController();
-  const timer = setTimeout(() => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const fire = () => {
     try {
       controller.abort(new DOMException('The model took too long to answer.', 'TimeoutError'));
     } catch {
       controller.abort();
     }
-  }, ms);
+  };
   if (user) {
     if (user.aborted) {
-      clearTimeout(timer);
       controller.abort();
     } else {
       user.addEventListener('abort', () => controller.abort(), { once: true });
     }
   }
-  return { signal: controller.signal, cancel: () => clearTimeout(timer) };
+  return {
+    signal: controller.signal,
+    arm: (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(fire, Math.max(1, ms));
+    },
+    cancel: () => clearTimeout(timer),
+  };
+}
+
+/** One parsed `data:` payload from an SSE stream. */
+export type StreamChunk =
+  | { kind: 'content'; text: string; model?: string }
+  | { kind: 'tool-args'; text: string; model?: string }
+  | { kind: 'done' }
+  | { kind: 'error'; body: unknown };
+
+/**
+ * Fold one SSE data frame into a typed chunk. Handles both dialects the free
+ * models speak: `delta.content` strings, and `delta.tool_calls` argument
+ * fragments (null content while a tool call streams). Comment keep-alives never
+ * reach this — the caller skips lines before `data:`.
+ */
+export function parseStreamChunk(data: string): StreamChunk | null {
+  const trimmed = data.trim();
+  if (!trimmed) return null;
+  if (trimmed === '[DONE]') return { kind: 'done' };
+
+  let json: unknown;
+  try {
+    json = JSON.parse(trimmed);
+  } catch {
+    return null; // split frames are completed by the caller's line buffer
+  }
+  if (!json || typeof json !== 'object') return null;
+
+  const root = json as Record<string, unknown>;
+  if (root.error !== undefined) return { kind: 'error', body: json };
+  const model = typeof root.model === 'string' ? root.model : undefined;
+
+  const choices = Array.isArray(root.choices) ? root.choices : [];
+  const delta = (choices[0] as Record<string, unknown> | undefined)?.delta as
+    | Record<string, unknown>
+    | undefined;
+  if (!delta) return null;
+
+  const toolCalls = delta.tool_calls as
+    | Array<{ function?: { arguments?: unknown } }>
+    | undefined;
+  const args = toolCalls?.[0]?.function?.arguments;
+  if (typeof args === 'string' && args) return { kind: 'tool-args', text: args, model };
+
+  const content = delta.content;
+  if (typeof content === 'string' && content) return { kind: 'content', text: content, model };
+
+  return null; // role announcements, empty finish frames, reasoning metadata
+}
+
+/**
+ * Read an SSE stream down to the same shape a non-streaming response has, so
+ * everything downstream (classify, extract, repair) works unchanged. The
+ * accumulated payload is mirrored to req.onStream as it grows.
+ */
+async function readSseStream(
+  res: Response,
+  req: ChatRequest,
+  io: { arm: (ms: number) => void },
+): Promise<unknown> {
+  if (!res.body) throw new RequestFailure('no-content', res.status, 'The stream had no body.');
+  const capAt = Date.now() + (req.timeoutMs ?? STREAM_CAP_MS);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let content = '';
+  let toolArgs = '';
+  let model: string | undefined;
+  let streamError: unknown;
+  let done = false;
+
+  for (;;) {
+    // Re-arm on every loop: any byte activity (including keep-alives) proves
+    // the stream is alive. The hard cap always wins.
+    io.arm(Math.min(STREAM_STALL_MS, Math.max(1000, capAt - Date.now())));
+
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      try {
+        await reader.cancel();
+      } catch {
+        /* already gone */
+      }
+      throw classifyThrown(err);
+    }
+    if (chunk.done) break;
+    if (Date.now() >= capAt) {
+      try {
+        await reader.cancel();
+      } catch {
+        /* closed */
+      }
+      throw new RequestFailure('timeout', 0, 'The model ran past its time budget.');
+    }
+
+    buffer += decoder.decode(chunk.value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith(':') || !line.startsWith('data:')) continue;
+      const parsed = parseStreamChunk(line.slice(5));
+      if (!parsed) continue;
+      if (parsed.kind === 'done') {
+        done = true;
+        break;
+      }
+      if (parsed.kind === 'error') {
+        streamError = parsed.body;
+        done = true;
+        break;
+      }
+      model = parsed.model ?? model;
+      if (parsed.kind === 'content') content += parsed.text;
+      else toolArgs += parsed.text;
+      req.onStream?.(toolArgs || content);
+    }
+    if (done) break;
+  }
+  try {
+    await reader.cancel();
+  } catch {
+    /* already closed */
+  }
+
+  if (streamError !== undefined) {
+    const failure = classifyResponse(res, streamError);
+    if (failure) throw failure;
+    throw new RequestFailure('upstream', 502, extractMessage(streamError, 'Stream failed.'));
+  }
+
+  // Rebuild the non-streaming body shape the rest of the pipeline expects.
+  const message = toolArgs
+    ? { content: null, tool_calls: [{ function: { name: 'submit', arguments: toolArgs } }] }
+    : { content };
+  return { choices: [{ message }], model };
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>
@@ -167,26 +330,28 @@ async function attempt(
     ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
     ...(req.maxTokens !== undefined ? { max_tokens: req.maxTokens } : {}),
     ...(req.extra ?? {}),
+    ...(req.onStream ? { stream: true } : {}),
   };
 
-  // The timeout covers the BODY too, not just the connection: providers send
-  // headers early and then stream for minutes, and a stalled stream must not
-  // pin the scan either.
   let res: Response;
   let parsed: unknown;
-  const timeout = combinedSignal(req.signal, req.timeoutMs ?? ATTEMPT_TIMEOUT_MS);
+  const io = ioSignal(req.signal);
+  io.arm(req.timeoutMs ?? ATTEMPT_TIMEOUT_MS);
   try {
     res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: 'POST',
       headers: headersFor(key.key),
       body: JSON.stringify(body),
-      signal: timeout.signal,
+      signal: io.signal,
     });
-    parsed = await readBody(res);
+    // Streaming is opt-in (the caller asked for live chunks); error bodies are
+    // always read buffered so the classifier sees the whole envelope.
+    parsed =
+      res.ok && req.onStream && res.body ? await readSseStream(res, req, io) : await readBody(res);
   } catch (err) {
     throw classifyThrown(err);
   } finally {
-    timeout.cancel();
+    io.cancel();
   }
 
   const failure = classifyResponse(res, parsed);

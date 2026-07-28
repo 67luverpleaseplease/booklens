@@ -306,7 +306,9 @@ export default function App() {
       <div className={desktop ? 'flex h-full gap-4 p-4' : 'h-full'}>
         <div
           className={
-            desktop ? 'relative min-w-0 flex-1 overflow-hidden rounded-3xl' : 'relative h-full'
+            desktop
+              ? 'relative min-w-0 flex-1 overflow-hidden rounded-3xl ring-1 ring-ink-line/80 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.7)]'
+              : 'relative h-full'
           }
         >
           <Viewfinder
@@ -315,6 +317,7 @@ export default function App() {
             frozenFrame={shots[0] ?? null}
             scanning={scan.busy}
             progress={scan.progress}
+            streamText={scan.streamText}
           />
 
           <TopBar
@@ -356,7 +359,12 @@ export default function App() {
                 <Tray shots={shots} onClear={() => setShots([])} onAdd={() => void pickImages({ multiple: true }).then(addFiles)} />
               ) : null}
 
-              <div className="pointer-events-auto flex items-end justify-center gap-6 px-6">
+              <div
+                className={[
+                  'pointer-events-auto flex items-end justify-center gap-6 px-6',
+                  desktop ? 'glass-dark mx-auto w-fit rounded-full px-7 py-3' : '',
+                ].join(' ')}
+              >
                 <GalleryButton onClick={() => void pickImages({ multiple: true }).then(addFiles)} />
                 <SealShutter
                   onPress={() => void onStamp()}
@@ -516,7 +524,14 @@ function TopBar({
 }) {
   return (
     <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 px-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
-      <div className="glass-dark flex items-center gap-1 rounded-full p-1">
+      <div className="flex items-center gap-2">
+        <span className="glass-dark hidden items-baseline gap-1.5 rounded-full py-2 pr-4 pl-3 md:flex">
+          <span className="han text-[15px] leading-none text-paper">书镜</span>
+          <span className="font-mono text-[8.5px] tracking-[0.22em] text-paper/50 uppercase">
+            BookLens
+          </span>
+        </span>
+        <div className="glass-dark flex items-center gap-1 rounded-full p-1">
         {(['cover', 'pages'] as const).map((mode) => (
           <button
             key={mode}
@@ -533,6 +548,7 @@ function TopBar({
             {mode === 'cover' ? '封面' : '书页'}
           </button>
         ))}
+        </div>
       </div>
 
       <div className="flex items-center gap-1.5">

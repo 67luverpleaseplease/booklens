@@ -1,7 +1,8 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { CameraState } from '../hooks/useCamera';
 import { PHASE_LABEL, type ScanPhase, type ScanProgress } from '../lib/vision/analyze';
+import { liveDigest } from '../lib/vision/liveText';
 
 export function Viewfinder({
   videoRef,
@@ -9,6 +10,7 @@ export function Viewfinder({
   frozenFrame,
   scanning,
   progress,
+  streamText,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
   camera: CameraState;
@@ -16,6 +18,8 @@ export function Viewfinder({
   frozenFrame: string | null;
   scanning: boolean;
   progress: ScanProgress;
+  /** Raw payload streaming in from the model, before it becomes a result. */
+  streamText?: string;
 }) {
   return (
     <div className="relative h-full w-full overflow-hidden bg-ink">
@@ -65,22 +69,33 @@ export function Viewfinder({
 
       {camera.ready && !scanning && !frozenFrame ? <CornerGuides /> : null}
 
-      <AnimatePresence>{scanning ? <ScanOverlay progress={progress} /> : null}</AnimatePresence>
+      <AnimatePresence>
+        {scanning ? <ScanOverlay progress={progress} streamText={streamText ?? ''} /> : null}
+      </AnimatePresence>
     </div>
   );
 }
 
 /** The ink-wash sweep, plus a live status card that owns the wait. */
-function ScanOverlay({ progress }: { progress: ScanProgress }) {
+function ScanOverlay({ progress, streamText }: { progress: ScanProgress; streamText: string }) {
   const phase = progress.phase as ScanPhase;
   const label = PHASE_LABEL[phase] ?? PHASE_LABEL.reading;
   const [elapsed, setElapsed] = useState(0);
+  const scrollBox = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const t0 = Date.now();
     const t = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
     return () => clearInterval(t);
   }, []);
+
+  const live = liveDigest(streamText);
+
+  // Keep the feed pinned to the newest text — like watching over its shoulder.
+  useEffect(() => {
+    const el = scrollBox.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [live]);
 
   return (
     <motion.div
@@ -155,6 +170,33 @@ function ScanOverlay({ progress }: { progress: ScanProgress }) {
             <p className="relative mt-2 border-t border-paper/10 pt-2 font-mono text-[9.5px] leading-relaxed text-paper/50">
               busy hours are slow — still working, hang tight
             </p>
+          ) : null}
+
+          {/* The model's payload arriving live, digested into flowing words.
+              Proof of work while the real parse happens after the stream. */}
+          {live ? (
+            <div className="relative mt-2.5 rounded-xl border border-paper/10 bg-ink/45 px-3 py-2">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="font-mono text-[8.5px] tracking-[0.2em] text-seal/80 uppercase">
+                  live · 实时
+                </span>
+                <span className="font-mono text-[8.5px] text-paper/35 tabular-nums">
+                  {streamText.length} chars
+                </span>
+              </div>
+              <div
+                ref={scrollBox}
+                className="thin-scroll max-h-[86px] overflow-y-auto"
+              >
+                <p className="han text-[13.5px] leading-relaxed text-paper/85">
+                  {live}
+                  <span
+                    aria-hidden
+                    className="live-caret ml-0.5 inline-block h-[13px] w-[2px] translate-y-[2px] rounded-full bg-seal"
+                  />
+                </p>
+              </div>
+            </div>
           ) : null}
         </motion.div>
       </div>

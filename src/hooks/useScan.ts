@@ -18,6 +18,8 @@ export function useScan() {
   const [progress, setProgress] = useState<ScanProgress>({ phase: 'idle' });
   const [outcome, setOutcome] = useState<AnalyzeOutcome | null>(null);
   const [error, setError] = useState<ScanError | null>(null);
+  /** Live payload text streaming in from the model — the "watch it read" feed. */
+  const [streamText, setStreamText] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   // Kept so "try a different model" can re-read the same photo without
   // asking the user to take it again.
@@ -53,6 +55,7 @@ export function useScan() {
       // On a retry, hold the old result on screen until the new one lands —
       // blanking the sheet mid-request feels like a crash.
       if (!opts.keepPrevious) setOutcome(null);
+      setStreamText('');
       setProgress({ phase: 'reading' });
 
       try {
@@ -64,9 +67,11 @@ export function useScan() {
           preferChain: opts.preferChain,
           signal: controller.signal,
           onProgress: setProgress,
+          onStream: setStreamText,
         });
         setOutcome(result);
         setProgress({ phase: 'done', via: result.modelLabel });
+        setStreamText('');
 
         // Save in the background — a slow thumbnail shouldn't delay the result.
         void (async () => {
@@ -102,6 +107,7 @@ export function useScan() {
           setError({ kind: 'failed', message: humanize(failure) });
         }
         setProgress({ phase: 'error' });
+        setStreamText('');
         return null;
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
@@ -133,6 +139,7 @@ export function useScan() {
     outcome,
     error,
     busy,
+    streamText,
     phase: progress.phase as ScanPhase,
   };
 }

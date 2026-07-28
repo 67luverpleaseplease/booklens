@@ -226,6 +226,21 @@ body {
   animation: float-slow 4.5s ease-in-out infinite;
 }
 
+/* Blinking caret for the live stream feed. */
+@keyframes caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.live-caret {
+  animation: caret-blink 0.9s steps(1) infinite;
+}
+
 /* ---- surfaces -------------------------------------------------------- */
 /* Frosted dark pill — top chrome and the scan status card. */
 .glass-dark {
