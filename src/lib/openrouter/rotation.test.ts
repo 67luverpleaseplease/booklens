@@ -125,6 +125,37 @@ describe('key rotation', () => {
     expect(seen).not.toContain('key-b');
   });
 
+  it('does not cool off or burn a key when the shared provider pool is busy', async () => {
+    const { keychain, ledger, PRIMARY_CHAIN, chatComplete } = await freshModules();
+    const a = keychain.add('key-a', 'a');
+    // The exact 429 shape OpenRouter returns when the SHARED free pool is
+    // congested — the old classifier pinned this on the key and it never
+    // recovered. Verified live against /api/v1/chat/completions.
+    mockFetchByKey({
+      'key-a': {
+        status: 429,
+        body: {
+          error: {
+            message: 'Provider returned error',
+            code: 429,
+            metadata: {
+              raw: 'google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly',
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      chatComplete({ chain: PRIMARY_CHAIN, messages: [{ role: 'user', content: 'hi' }] }),
+    ).rejects.toThrow(/Provider returned error/);
+
+    const k = keychain.list()[0];
+    expect(k.status).toBe('healthy'); // old bug: 'cooling' badges forever
+    expect(keychain.available()).toHaveLength(1); // a retry is allowed right away
+    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(0); // failed calls don't count
+  });
+
   it('honours Retry-After when setting the cooldown', async () => {
     const { keychain, PRIMARY_CHAIN, chatComplete } = await freshModules();
     keychain.add('key-a', 'a');
@@ -219,7 +250,7 @@ describe('key rotation', () => {
     expect(body.route).toBe('fallback');
   });
 
-  it('counts one ledger entry per network attempt, including the 5xx retry', async () => {
+  it('refunds a failed upstream attempt — only the successful call counts', async () => {
     const { keychain, ledger, PRIMARY_CHAIN, chatComplete } = await freshModules();
     const a = keychain.add('key-a', 'a');
     mockFetchByKey({
@@ -228,6 +259,8 @@ describe('key rotation', () => {
 
     await chatComplete({ chain: PRIMARY_CHAIN, messages: [{ role: 'user', content: 'hi' }] });
 
-    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(2);
+    // Two attempts were sent (record ×2), the 5xx was refunded (refund ×1):
+    // matches OpenRouter's accounting, which bills completions, not rejects.
+    expect(ledger.snapshot(a.id, a.limits).dayUsed).toBe(1);
   });
 });

@@ -60,6 +60,21 @@ describe('QuotaLedger', () => {
     expect(snap.dayResetAt).toBe(nextUtcMidnight(t));
   });
 
+  it('refunds a failed transport attempt, minute window and day count', () => {
+    const t = 1_700_000_000_000;
+    l.record('k', t);
+    l.record('k', t);
+    l.refund('k', t);
+    const snap = l.snapshot('k', limits, t);
+    expect(snap.minuteUsed).toBe(1);
+    expect(snap.dayUsed).toBe(1);
+    // Congestion-day with nothing spent must never lock the app out: no going
+    // below zero either.
+    l.refund('k', t);
+    l.refund('k', t);
+    expect(l.snapshot('k', limits, t).dayUsed).toBe(0);
+  });
+
   it('reports how long until the minute window frees up', () => {
     const t = 1_700_000_000_000;
     for (let i = 0; i < 3; i++) l.record('k', t);
@@ -210,6 +225,32 @@ describe('classifyResponse', () => {
     const f = classifyResponse(res(429, { 'retry-after': '42' }), body)!;
     expect(f.kind).toBe('rate-limited');
     expect(f.retryAfter).toBe(42);
+    expect(f.shouldRotateKey).toBe(true);
+  });
+
+  it('classifies shared-pool congestion 429 as upstream, never a key rate-limit', () => {
+    // Exact shape OpenRouter returns when the FREE POOL is busy — the key was
+    // never involved (verified live against /api/v1/chat/completions).
+    const f = classifyResponse(res(429), {
+      error: {
+        message: 'Provider returned error',
+        code: 429,
+        metadata: {
+          raw: 'google/gemma-4-31b-it:free is temporarily rate-limited upstream. Please retry shortly',
+        },
+      },
+    })!;
+    expect(f.kind).toBe('upstream');
+    // Blaming the key is exactly the failure mode of the old classifier.
+    expect(f.shouldRotateKey).toBe(false);
+    expect(f.shouldRetrySameKey).toBe(true);
+  });
+
+  it('keeps a genuine key-sided 429 as rate-limited', () => {
+    const f = classifyResponse(res(429), {
+      error: { message: 'Rate limit exceeded: 20 requests per minute', code: 429 },
+    })!;
+    expect(f.kind).toBe('rate-limited');
     expect(f.shouldRotateKey).toBe(true);
   });
 

@@ -95,6 +95,19 @@ export class QuotaLedger {
   }
 
   /**
+   * Undo one record for an attempt that never ran against the account — a busy
+   * provider pool or a dropped connection. OpenRouter does not count failed
+   * requests toward the daily free budget (verified: usage stays 0), so a
+   * congested day must not lock the app out locally either.
+   */
+  refund(keyId: string, now = Date.now()): void {
+    const s = this.stateFor(keyId, now);
+    if (s.minuteWindow.length) s.minuteWindow.pop();
+    s.dayCount = Math.max(0, s.dayCount - 1);
+    this.save();
+  }
+
+  /**
    * A real 429 means our local count was optimistic — saturate the minute
    * window so we stop trying until it drains.
    */

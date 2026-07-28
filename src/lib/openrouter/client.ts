@@ -191,6 +191,10 @@ export async function chatComplete(req: ChatRequest): Promise<ChatResponse> {
       if (failure.kind === 'network' && req.signal?.aborted) throw failure;
       lastFailure = failure;
 
+      // A busy pool or a dropped connection never touched the account — don't
+      // let it eat the local quota estimate either.
+      if (failure.kind === 'upstream' || failure.kind === 'network') ledger.refund(key.id);
+
       // ④ A 5xx or a dropped connection says nothing about the key — one retry.
       if (failure.shouldRetrySameKey) {
         try {
@@ -204,6 +208,9 @@ export async function chatComplete(req: ChatRequest): Promise<ChatResponse> {
             retryErr instanceof RequestFailure ? retryErr : classifyThrown(retryErr);
           if (retryFailure.kind === 'network' && req.signal?.aborted) throw retryFailure;
           lastFailure = retryFailure;
+          if (retryFailure.kind === 'upstream' || retryFailure.kind === 'network') {
+            ledger.refund(key.id);
+          }
           keychain.reportFailure(key.id, retryFailure);
           if (!retryFailure.shouldRotateKey && retryFailure.kind === 'bad-request') throw retryFailure;
           continue;

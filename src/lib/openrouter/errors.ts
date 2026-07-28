@@ -77,12 +77,38 @@ export function extractMessage(body: unknown, fallback: string): string {
 }
 
 /**
+ * A 429 can mean two very different things, and OpenRouter's phrase for each
+ * is stable (both verified live against /api/v1/chat/completions):
+ *
+ *   key-level:   the key actually exceeded its own rpm/day budget
+ *   pool-level:  "Provider returned error", code 429, and metadata.raw reads
+ *                "<model> is temporarily rate-limited upstream. Please retry
+ *                shortly" — i.e. the SHARED free pool is busy. The key was
+ *                never touched, and OpenRouter does not count the attempt
+ *                against the account.
+ *
+ * Treating the second as a key rate-limit poisons healthy keys for no reason,
+ * so it must classify as `upstream` instead.
+ */
+const PROVIDER_CONGESTION =
+  /temporarily rate[ -]?limited upstream|upstream.{0,40}rate[ -]?limit|rate[ -]?limit.{0,40}upstream|too many requests.{0,40}(upstream|provider)|provider returned error/i;
+
+function providerCongestionHint(body: unknown, message: string): boolean {
+  if (PROVIDER_CONGESTION.test(message)) return true;
+  const raw = (
+    body as { error?: { metadata?: { raw?: unknown } } } | null
+  )?.error?.metadata?.raw;
+  return typeof raw === 'string' && PROVIDER_CONGESTION.test(raw);
+}
+
+/**
  * Some 200-OK responses carry a provider error inside the payload rather than
  * in the HTTP status. Callers pass the parsed body so we can catch those too.
  */
 export function classifyResponse(res: Response, body: unknown): RequestFailure | null {
   const retryAfter = readRetryAfter(res.headers);
   const message = extractMessage(body, res.statusText || `HTTP ${res.status}`);
+  const congested = providerCongestionHint(body, message);
 
   if (res.ok) {
     // A 200 that still contains an `error` object — OpenRouter does this when an
@@ -91,18 +117,27 @@ export function classifyResponse(res: Response, body: unknown): RequestFailure |
       const inner = (body as { error?: { code?: unknown } }).error;
       const code = Number(inner?.code);
       if (Number.isFinite(code) && code >= 400) {
-        return classifyStatus(code, message, retryAfter);
+        return classifyStatus(code, message, retryAfter, congested);
       }
       return new RequestFailure('upstream', 502, message, retryAfter);
     }
     return null;
   }
 
-  return classifyStatus(res.status, message, retryAfter);
+  return classifyStatus(res.status, message, retryAfter, congested);
 }
 
-function classifyStatus(status: number, message: string, retryAfter?: number): RequestFailure {
-  if (status === 429) return new RequestFailure('rate-limited', status, message, retryAfter);
+function classifyStatus(
+  status: number,
+  message: string,
+  retryAfter?: number,
+  upstreamBusy = false,
+): RequestFailure {
+  if (status === 429) {
+    // Pool congestion is transient and key-neutral — never cool off the key.
+    if (upstreamBusy) return new RequestFailure('upstream', status, message, retryAfter);
+    return new RequestFailure('rate-limited', status, message, retryAfter);
+  }
   if (status === 402) return new RequestFailure('quota-exhausted', status, message, retryAfter);
   if (status === 401 || status === 403)
     return new RequestFailure('invalid-key', status, message, retryAfter);
@@ -137,7 +172,7 @@ export function humanize(f: RequestFailure): string {
     case 'bad-request':
       return `The request was rejected: ${f.message}`;
     case 'upstream':
-      return 'The model provider had a problem.';
+      return 'The shared free models are busy right now — nothing is wrong with your key. Try again shortly.';
     case 'network':
       return 'No connection.';
     case 'no-content':
