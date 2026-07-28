@@ -47,7 +47,7 @@ export function PlayerBar({
   };
 
   return (
-    <div className="pointer-events-auto rounded-2xl border border-paper-line bg-paper/95 backdrop-blur-sm">
+    <div className="pointer-events-auto rounded-[20px] border border-paper-line bg-paper/95 shadow-[0_14px_36px_-16px_rgba(20,16,10,0.4)] backdrop-blur-md">
       {/* Looping is a mode you can get stuck in, so it announces itself and
           offers a way out rather than living only in the text highlight. */}
       {looping ? (

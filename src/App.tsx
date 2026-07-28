@@ -516,7 +516,7 @@ function TopBar({
 }) {
   return (
     <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 px-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
-      <div className="flex items-center gap-1 rounded-full bg-ink/55 p-1 backdrop-blur-sm">
+      <div className="glass-dark flex items-center gap-1 rounded-full p-1">
         {(['cover', 'pages'] as const).map((mode) => (
           <button
             key={mode}
@@ -524,8 +524,10 @@ function TopBar({
             onClick={() => onIntent(mode)}
             aria-pressed={intent === mode}
             className={[
-              'han rounded-full px-3 py-1.5 text-[13px] transition-colors',
-              intent === mode ? 'bg-paper text-ink' : 'text-paper/70 hover:text-paper',
+              'han rounded-full px-3 py-1.5 text-[13px] transition-all duration-200',
+              intent === mode
+                ? 'bg-paper text-ink shadow-[0_2px_10px_rgba(0,0,0,0.35)]'
+                : 'text-paper/70 hover:text-paper',
             ].join(' ')}
           >
             {mode === 'cover' ? '封面' : '书页'}
@@ -550,7 +552,7 @@ function TopBar({
           type="button"
           onClick={onSettings}
           aria-label="Settings"
-          className="relative grid h-9 w-9 place-items-center rounded-full bg-ink/55 text-paper backdrop-blur-sm transition-colors hover:bg-ink"
+          className="glass-dark relative grid h-9 w-9 place-items-center rounded-full text-paper transition-colors hover:bg-ink/80"
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
             <path d="M12 8a4 4 0 100 8 4 4 0 000-8zm9.4 4a7.4 7.4 0 01-.1 1.2l2 1.6-1.9 3.3-2.4-1a7.5 7.5 0 01-2 1.2l-.4 2.6h-3.8l-.4-2.6a7.5 7.5 0 01-2-1.2l-2.4 1L4.7 14.8l2-1.6A7.4 7.4 0 016.6 12c0-.4 0-.8.1-1.2l-2-1.6 1.9-3.3 2.4 1a7.5 7.5 0 012-1.2l.4-2.6h3.8l.4 2.6c.7.3 1.4.7 2 1.2l2.4-1 1.9 3.3-2 1.6c.1.4.1.8.1 1.2z" />
@@ -582,8 +584,8 @@ function IconButton({
       aria-label={label}
       aria-pressed={active}
       className={[
-        'grid h-9 w-9 place-items-center rounded-full backdrop-blur-sm transition-colors',
-        active ? 'bg-amber text-ink' : 'bg-ink/55 text-paper hover:bg-ink',
+        'glass-dark grid h-9 w-9 place-items-center rounded-full transition-colors',
+        active ? 'bg-amber/90! text-ink' : 'text-paper hover:bg-ink/80',
       ].join(' ')}
     >
       <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -599,7 +601,7 @@ function GalleryButton({ onClick }: { onClick: () => void }) {
       type="button"
       onClick={onClick}
       aria-label="Choose a photo"
-      className="grid h-11 w-11 place-items-center rounded-xl border border-ink-line bg-ink/55 text-paper backdrop-blur-sm transition-colors hover:border-paper/40"
+      className="glass-dark grid h-11 w-11 place-items-center rounded-xl text-paper transition-colors hover:bg-ink/80"
     >
       <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
         <path d="M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zm1 12h14l-4.5-6-3.5 4.5-2.5-3z" />
@@ -624,7 +626,7 @@ function Tray({
           key={i}
           src={s}
           alt=""
-          className="h-12 w-9 rounded-md border border-ink-line object-cover"
+          className="h-12 w-9 rounded-lg border border-paper/15 object-cover shadow-[0_6px_16px_rgba(0,0,0,0.45)]"
         />
       ))}
       {shots.length < MAX_SHOTS ? (
@@ -660,18 +662,32 @@ function Banner({
   body: string;
   action?: { label: string; onClick: () => void };
 }) {
-  const border = tone === 'amber' ? 'border-amber/40' : 'border-seal/40';
+  const bar = tone === 'amber' ? 'bg-amber' : 'bg-seal';
   const accent = tone === 'amber' ? 'text-amber' : 'text-seal';
+  const glow =
+    tone === 'amber'
+      ? '0 16px 40px -16px color-mix(in srgb, var(--color-amber) 45%, transparent)'
+      : '0 16px 40px -16px color-mix(in srgb, var(--color-seal) 50%, transparent)';
   return (
     <motion.div
-      initial={{ opacity: 0, y: -8 }}
-      animate={{ opacity: 1, y: 0 }}
+      initial={{ opacity: 0, y: -12, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -8 }}
+      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
       role="status"
-      className={`absolute inset-x-4 top-[calc(4.5rem+env(safe-area-inset-top))] z-30 rounded-2xl border ${border} bg-ink-soft/95 px-3.5 py-3 backdrop-blur-sm`}
+      style={{ boxShadow: glow }}
+      className="glass-dark absolute inset-x-4 top-[calc(4.5rem+env(safe-area-inset-top))] z-30 overflow-hidden rounded-[18px] px-4 py-3.5"
     >
-      <p className={`text-[13.5px] leading-snug font-medium ${accent}`}>{title}</p>
-      <p className="mt-0.5 text-[12.5px] leading-snug text-paper/65">{body}</p>
+      <span aria-hidden className={`absolute inset-y-0 left-0 w-[3px] ${bar}`} />
+      <div className="flex items-center gap-2">
+        <span
+          aria-hidden
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${bar}`}
+          style={{ animation: 'pulse-guide 1.6s ease-in-out infinite' }}
+        />
+        <p className={`text-[13.5px] leading-snug font-medium ${accent}`}>{title}</p>
+      </div>
+      <p className="mt-1 text-[12.5px] leading-snug text-paper/65">{body}</p>
       {action ? (
         <button
           type="button"
@@ -703,13 +719,21 @@ function ErrorToast({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -8 }}
-      animate={{ opacity: 1, y: 0 }}
+      initial={{ opacity: 0, y: -12, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -8 }}
+      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
       role="alert"
-      className="absolute inset-x-4 top-[calc(4.5rem+env(safe-area-inset-top))] z-30 rounded-2xl border border-seal/40 bg-ink-soft/95 px-3.5 py-3 backdrop-blur-sm"
+      style={{
+        boxShadow: '0 16px 40px -16px color-mix(in srgb, var(--color-seal) 50%, transparent)',
+      }}
+      className="glass-dark absolute inset-x-4 top-[calc(4.5rem+env(safe-area-inset-top))] z-30 overflow-hidden rounded-[18px] px-4 py-3.5"
     >
-      <p className="text-[13.5px] leading-snug text-paper">{error.message}</p>
+      <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-seal" />
+      <div className="flex items-center gap-2">
+        <span className="han shrink-0 text-[13px] text-seal">出错了</span>
+        <p className="text-[13.5px] leading-snug text-paper">{error.message}</p>
+      </div>
       {error.kind === 'no-keys' ? (
         <button
           type="button"
@@ -719,8 +743,13 @@ function ErrorToast({
           add a free key →
         </button>
       ) : wait > 0 ? (
-        <p className="mt-1 font-mono text-[11px] text-paper/50">
-          Back in {mins > 1 ? `${mins} minutes` : `${Math.ceil(wait / 1000)}s`}.
+        <p className="mt-1.5 font-mono text-[11px] text-paper/50">
+          <span className="scan-dots mr-1" aria-hidden>
+            <span>·</span>
+            <span>·</span>
+            <span>·</span>
+          </span>
+          back in {mins > 1 ? `${mins} minutes` : `${Math.ceil(wait / 1000)}s`}
         </p>
       ) : null}
     </motion.div>

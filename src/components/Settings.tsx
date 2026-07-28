@@ -272,6 +272,7 @@ function Section({
   return (
     <section className="mb-7">
       <h2 className="mb-2.5 flex items-baseline gap-2">
+        <span aria-hidden className="h-1.5 w-1.5 translate-y-[-1px] rotate-45 bg-seal/80" />
         <span className="font-mono text-[10px] tracking-[0.18em] text-graphite/70 uppercase">
           {title}
         </span>

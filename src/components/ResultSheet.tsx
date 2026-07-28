@@ -95,7 +95,10 @@ export function ResultSheet({
         data-reading-surface
         className="thin-scroll flex-1 overflow-y-auto overscroll-contain px-4 pb-28"
       >
-        <BookHeader result={outcome.result} thumbnail={thumbnail} modelLabel={outcome.modelLabel} />
+        {/* The book identity gets a warm header band, like a title page. */}
+        <div className="-mx-4 -mt-1 mb-1 border-b border-paper-line bg-[linear-gradient(180deg,color-mix(in_srgb,var(--color-paper-deep)_55%,transparent),transparent)] px-4 pt-1 pb-3.5">
+          <BookHeader result={outcome.result} thumbnail={thumbnail} modelLabel={outcome.modelLabel} />
+        </div>
 
         {outcome.result.caveats ? (
           <p className="mt-3 rounded-xl border-l-[3px] border-amber bg-amber/10 px-3 py-2 text-[13px] leading-snug text-graphite">
@@ -155,8 +158,22 @@ export function ResultSheet({
         {/* The payoff: what you'd actually say to another person. Given the
             strongest treatment on the page because it is the point. */}
         {outcome.result.talking_points.length ? (
-          <section className="mt-5 overflow-hidden rounded-2xl bg-ink px-4 py-4 text-paper">
-            <h2 className="flex items-baseline gap-2">
+          <section className="card-lift relative mt-5 overflow-hidden rounded-2xl bg-ink px-4 py-4 text-paper">
+            <span
+              aria-hidden
+              className="absolute inset-y-0 left-0 w-[3px]"
+              style={{
+                background:
+                  'linear-gradient(180deg, var(--color-seal), var(--color-amber))',
+              }}
+            />
+            <span
+              aria-hidden
+              className="han pointer-events-none absolute -top-4 right-1 text-[72px] leading-none text-seal/15 select-none"
+            >
+              引
+            </span>
+            <h2 className="relative flex items-baseline gap-2">
               <span className="han text-[15px]">说给别人听</span>
               <span className="font-mono text-[9.5px] tracking-[0.18em] text-paper/45 uppercase">
                 say it out loud
@@ -313,10 +330,10 @@ export function ResultSheet({
         className="fixed inset-x-0 top-0 z-40 flex flex-col bg-paper text-ink shadow-[0_-14px_50px_-10px_rgba(0,0,0,0.6)]"
       >
         <div
-          className="flex cursor-grab touch-none items-center justify-center py-2.5 active:cursor-grabbing"
+          className="flex cursor-grab touch-none items-center justify-center border-b border-paper-line/60 pt-3 pb-2.5 active:cursor-grabbing"
           onDoubleClick={() => setSnap(snap === 'full' ? 'half' : 'full')}
         >
-          <span className="h-1 w-9 rounded-full bg-paper-line" aria-hidden />
+          <span className="h-1.5 w-11 rounded-full bg-paper-line" aria-hidden />
         </div>
         {body}
       </motion.section>

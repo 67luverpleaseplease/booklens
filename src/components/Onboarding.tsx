@@ -33,17 +33,32 @@ export function Onboarding({ open, onDone }: { open: boolean; onDone: () => void
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="fixed inset-0 z-[60] grid place-items-center bg-ink px-5"
+          style={{
+            background:
+              'radial-gradient(ellipse 90% 60% at 50% -10%, color-mix(in srgb, var(--color-seal) 14%, transparent), transparent), var(--color-ink)',
+          }}
         >
-          <div className="w-full max-w-sm">
+          <div className="w-full max-w-sm rounded-[26px] border border-ink-line bg-ink-soft/70 p-6 shadow-[0_40px_90px_-30px_rgba(0,0,0,0.85)]">
             {step === 0 ? (
               <Card>
-                <div className="han mb-4 grid h-16 w-16 place-items-center rounded-[20px] bg-seal text-[32px] font-medium text-paper">
-                  读
+                <div className="relative mb-5 grid place-items-center">
+                  <span
+                    aria-hidden
+                    className="han grid h-[72px] w-[72px] place-items-center rounded-[22px] text-[36px] font-medium text-paper"
+                    style={{
+                      background:
+                        'linear-gradient(155deg, var(--color-seal) 15%, var(--color-seal-deep) 115%)',
+                      boxShadow:
+                        '0 0 0 7px color-mix(in srgb, var(--color-seal) 16%, transparent), 0 14px 34px -10px color-mix(in srgb, var(--color-seal) 65%, transparent), inset 0 1px 0 rgba(255,255,255,0.22)',
+                    }}
+                  >
+                    读
+                  </span>
                 </div>
-                <h1 className="font-display text-[34px] leading-tight text-paper">
+                <h1 className="text-center font-display text-[36px] leading-tight text-paper">
                   书镜 <span className="italic">BookLens</span>
                 </h1>
-                <p className="mt-2 text-[15px] leading-snug text-paper/70">
+                <p className="mt-2 text-center text-[15px] leading-snug text-paper/70">
                   Point your camera at a Chinese book. Get a handful of short summaries in Chinese
                   and English — and have them read to you, in a voice you choose.
                 </p>
@@ -122,6 +137,18 @@ export function Onboarding({ open, onDone }: { open: boolean; onDone: () => void
                 <Primary onClick={onDone}>Open the camera</Primary>
               </Card>
             ) : null}
+            {/* progress dots */}
+            <div className="mt-6 flex justify-center gap-1.5" aria-hidden>
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className={[
+                    'h-1.5 rounded-full transition-all duration-300',
+                    i === step ? 'w-5 bg-seal' : 'w-1.5 bg-ink-line',
+                  ].join(' ')}
+                />
+              ))}
+            </div>
           </div>
         </motion.div>
       ) : null}
@@ -151,12 +178,14 @@ function Step({ n, of }: { n: number; of: number }) {
 
 function Primary({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
+    <motion.button
       type="button"
       onClick={onClick}
-      className="mt-5 w-full rounded-2xl bg-paper px-4 py-3 text-[15px] text-ink transition-colors hover:bg-seal hover:text-paper"
+      whileTap={{ scale: 0.97 }}
+      className="mt-5 w-full rounded-2xl bg-paper px-4 py-3.5 text-[15px] text-ink transition-colors hover:bg-seal hover:text-paper"
+      style={{ boxShadow: '0 10px 26px -14px rgba(247,243,234,0.5)' }}
     >
       {children}
-    </button>
+    </motion.button>
   );
 }

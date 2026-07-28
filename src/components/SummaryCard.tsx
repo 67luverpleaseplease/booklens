@@ -51,7 +51,7 @@ export function SummaryCardView({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.06, type: 'spring', stiffness: 320, damping: 30 }}
       className={[
-        'relative overflow-hidden rounded-2xl border bg-paper py-3.5 pr-4 pl-4 transition-colors',
+        'card-lift relative overflow-hidden rounded-[18px] border bg-paper py-4 pr-4 pl-4 transition-all duration-200',
         speaking ? 'border-seal/45' : 'border-paper-line',
       ].join(' ')}
     >

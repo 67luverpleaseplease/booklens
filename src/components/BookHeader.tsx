@@ -18,7 +18,7 @@ export function BookHeader({
         <img
           src={thumbnail}
           alt=""
-          className="h-[92px] w-[68px] shrink-0 rounded-lg border border-paper-line object-cover"
+          className="h-[96px] w-[70px] shrink-0 -rotate-1 rounded-lg border border-paper-line object-cover shadow-[0_10px_22px_-8px_rgba(60,50,35,0.5)]"
         />
       ) : null}
 
@@ -50,6 +50,7 @@ export function BookHeader({
                 : 'bg-amber/18 text-[color-mix(in_srgb,var(--color-amber)_70%,var(--color-ink))]',
             ].join(' ')}
           >
+            <span aria-hidden className="mr-0.5 inline-block h-1 w-1 rounded-full bg-current" />
             {confident ? 'confident' : 'uncertain'} · {Math.round(result.confidence * 100)}%
           </span>
 
