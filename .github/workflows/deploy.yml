@@ -1,0 +1,58 @@
+# Deploy to GitHub Pages.
+#
+# DORMANT ON PURPOSE. This runs on push to `main`, but the repository has no
+# remote yet — nothing is published until you create one and enable Pages:
+#
+#   gh repo create booklens --public --source=. --push
+#   gh api -X POST repos/<you>/booklens/pages -f build_type=workflow
+#
+# vite.config.ts uses `base: './'`, so the same build also works on Cloudflare
+# Pages, Netlify, or straight off disk.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The dictionary is generated, not committed — it is ~5 MB of CC-CEDICT.
+      - run: npm run cedict
+
+      - run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

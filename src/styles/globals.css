@@ -1,0 +1,185 @@
+@import 'tailwindcss';
+
+/* Self-hosted so the app works offline and makes no third-party request. */
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
+@import '@fontsource/newsreader/400.css';
+@import '@fontsource/newsreader/500.css';
+@import '@fontsource/newsreader/600.css';
+/* Two weights only — each Noto Serif SC weight is ~120 unicode subsets, and
+   the design never uses a third. */
+@import '@fontsource/noto-serif-sc/400.css';
+@import '@fontsource/noto-serif-sc/500.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
+@theme {
+  /* dark camera */
+  --color-ink: #0b0b0d;
+  --color-ink-soft: #16161a;
+  --color-ink-line: #26262c;
+  --color-ink-mute: #6e6c75;
+
+  /* warm paper */
+  --color-paper: #f7f3ea;
+  --color-paper-deep: #ebe3d4;
+  --color-paper-line: #ded4c0;
+  --color-graphite: #5a5750;
+
+  /* accents */
+  --color-seal: #e2483d;
+  --color-seal-deep: #b8302a;
+  --color-jade: #3ddc97;
+  --color-amber: #e8a33d;
+
+  --font-display: 'Instrument Serif', ui-serif, serif;
+  --font-body: 'Newsreader', Georgia, serif;
+  --font-han: 'Noto Serif SC', 'Songti SC', serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --ease-stamp: cubic-bezier(0.2, 0, 0, 1);
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+:root {
+  color-scheme: dark;
+  --sheet-radius: 26px;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: var(--color-paper);
+  font-family: var(--font-body);
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Chinese always gets the serif face, wherever it appears. */
+.han {
+  font-family: var(--font-han);
+  font-feature-settings: 'kern' 1;
+}
+
+/* ---- grain ----------------------------------------------------------- */
+/* A single fixed overlay rather than per-surface textures — one paint,
+   no layout cost, and it unifies the dark and paper halves of the app. */
+.grain::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---- ruby pinyin ----------------------------------------------------- */
+/* Space for the annotation is reserved on the line box up front, so toggling
+   pinyin on and off never reflows the paragraph — only the <rt> contents are
+   hidden, never the element. */
+.ruby-host {
+  line-height: 2.6;
+  /* Pinyin is almost always wider than the 1–2 characters it sits over, so the
+     browser stretches the base to fit. Letting words breathe a little keeps
+     that stretch from reading as one run-on string. */
+  word-spacing: 0.08em;
+}
+.ruby-host ruby {
+  ruby-align: center;
+  ruby-position: over;
+  margin-inline: 0.5px;
+  /* Deliberately NOT `white-space: nowrap`. Adjacent <ruby> elements have no
+     whitespace between them, so nowrap suppresses the break opportunity and
+     the whole line runs off the edge. Ruby doesn't split internally anyway. */
+}
+.ruby-host rt {
+  font-family: var(--font-mono);
+  font-size: 0.5em;
+  font-weight: 400;
+  color: var(--color-graphite);
+  letter-spacing: -0.03em;
+  /* Keeps the annotation from crowding its neighbours when it overhangs. */
+  padding-inline: 0.28em;
+  user-select: none;
+}
+.ruby-host rt[data-hidden='true'] {
+  visibility: hidden;
+}
+
+/* ---- scrollbars ------------------------------------------------------ */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-paper-line) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-paper-line);
+  border-radius: 3px;
+}
+
+/* ---- focus ----------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--color-seal);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---- ink-wash scan sweep --------------------------------------------- */
+@keyframes ink-sweep {
+  0% {
+    transform: translateY(-110%);
+  }
+  100% {
+    transform: translateY(110%);
+  }
+}
+.ink-sweep {
+  animation: ink-sweep 1.6s var(--ease-sheet) infinite;
+}
+
+@keyframes seal-bleed {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-seal) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 18px color-mix(in srgb, var(--color-seal) 0%, transparent);
+  }
+}
+.seal-bleed {
+  animation: seal-bleed 0.45s var(--ease-stamp) forwards;
+}
+
+@keyframes pulse-guide {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
