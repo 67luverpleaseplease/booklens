@@ -129,9 +129,17 @@ export function useScan() {
     return run(previous.images, previous.intent, { preferChain: other, keepPrevious: true });
   }, [outcome, run]);
 
+  /** One more go at the same photo after an error — no retaking the shot. */
+  const retryLast = useCallback(async () => {
+    const previous = lastRun.current;
+    if (!previous) return null;
+    return run(previous.images, previous.intent);
+  }, [run]);
+
   return {
     run,
     retryOtherChain,
+    retryLast,
     canRetry: Boolean(outcome && lastRun.current),
     cancel,
     reset,

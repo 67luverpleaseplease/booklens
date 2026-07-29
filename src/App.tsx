@@ -341,7 +341,11 @@ export default function App() {
                 body="Reading a new book needs a connection, but your shelf still works — past summaries open and read aloud with the device voice."
               />
             ) : scan.error ? (
-              <ErrorToast error={scan.error} onOpenSettings={() => setSettingsOpen(true)} />
+              <ErrorToast
+                error={scan.error}
+                onOpenSettings={() => setSettingsOpen(true)}
+                onRetry={() => void scan.retryLast()}
+              />
             ) : keys.length === 0 ? (
               <Banner
                 key="nokey"
@@ -720,9 +724,11 @@ function Banner({
 function ErrorToast({
   error,
   onOpenSettings,
+  onRetry,
 }: {
   error: NonNullable<ReturnType<typeof useScan>['error']>;
   onOpenSettings: () => void;
+  onRetry: () => void;
 }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -750,24 +756,34 @@ function ErrorToast({
         <span className="han shrink-0 text-[13px] text-seal">出错了</span>
         <p className="text-[13.5px] leading-snug text-paper">{error.message}</p>
       </div>
-      {error.kind === 'no-keys' ? (
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="mt-1.5 font-mono text-[11px] text-seal underline underline-offset-4"
-        >
-          add a free key →
-        </button>
-      ) : wait > 0 ? (
-        <p className="mt-1.5 font-mono text-[11px] text-paper/50">
-          <span className="scan-dots mr-1" aria-hidden>
-            <span>·</span>
-            <span>·</span>
-            <span>·</span>
-          </span>
-          back in {mins > 1 ? `${mins} minutes` : `${Math.ceil(wait / 1000)}s`}
-        </p>
-      ) : null}
+      <div className="mt-1.5 flex items-center gap-3">
+        {error.kind === 'no-keys' ? (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="font-mono text-[11px] text-seal underline underline-offset-4"
+          >
+            add a free key →
+          </button>
+        ) : wait > 0 ? (
+          <p className="font-mono text-[11px] text-paper/50">
+            <span className="scan-dots mr-1" aria-hidden>
+              <span>·</span>
+              <span>·</span>
+              <span>·</span>
+            </span>
+            back in {mins > 1 ? `${mins} minutes` : `${Math.ceil(wait / 1000)}s`}
+          </p>
+        ) : (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="font-mono text-[11px] text-jade underline underline-offset-4"
+          >
+            try again →
+          </button>
+        )}
+      </div>
     </motion.div>
   );
 }

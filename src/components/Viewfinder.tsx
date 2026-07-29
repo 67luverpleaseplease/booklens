@@ -207,8 +207,8 @@ function ScanOverlay({ progress, streamText }: { progress: ScanProgress; streamT
 /** Four corner brackets — frame the book without covering it. */
 function CornerGuides() {
   const corners = [
-    'left-8 top-[18%] border-l-[2.5px] border-t-[2.5px] rounded-tl-xl',
-    'right-8 top-[18%] border-r-[2.5px] border-t-[2.5px] rounded-tr-xl',
+    'left-8 top-[24%] border-l-[2.5px] border-t-[2.5px] rounded-tl-xl',
+    'right-8 top-[24%] border-r-[2.5px] border-t-[2.5px] rounded-tr-xl',
     'left-8 bottom-[26%] border-l-[2.5px] border-b-[2.5px] rounded-bl-xl',
     'right-8 bottom-[26%] border-r-[2.5px] border-b-[2.5px] rounded-br-xl',
   ];
@@ -225,7 +225,7 @@ function CornerGuides() {
         />
       ))}
       <p
-        className="absolute inset-x-0 top-[calc(18%+3.75rem)] text-center font-mono text-[9.5px] tracking-[0.22em] text-paper/55 uppercase"
+        className="absolute inset-x-0 top-[calc(24%+3.75rem)] text-center font-mono text-[9.5px] tracking-[0.22em] text-paper/55 uppercase"
         style={{ textShadow: '0 1px 6px rgba(11,11,13,0.7)' }}
       >
         对准书页 · frame the book

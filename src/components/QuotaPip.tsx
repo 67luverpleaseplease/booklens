@@ -47,7 +47,7 @@ export function QuotaPip({ onOpen }: { onOpen: () => void }) {
       type="button"
       onClick={onOpen}
       aria-label={`${remaining} scans left today. Open key settings.`}
-      className="flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 backdrop-blur-sm transition-colors hover:bg-ink"
+      className="glass-dark flex items-center gap-1.5 rounded-full px-2.5 py-1 transition-colors hover:bg-ink"
     >
       <span
         aria-hidden
